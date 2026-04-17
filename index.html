@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>深海</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+const rnd = (a, b) => Math.random() * (b - a) + a;
+const rndInt = (a, b) => Math.floor(rnd(a, b));
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const darken2 = (hex, amt) => { const n=parseInt(hex.slice(1),16); const r=Math.max(0,((n>>16)&255)-amt); const g=Math.max(0,((n>>8)&255)-amt); const b=Math.max(0,(n&255)-amt); return `rgb(${r},${g},${b})`; };
+
+// ─── God Rays ─────────────────────────────────────────────────────────────────
+const rays = Array.from({length: 8}, (_, i) => ({
+  x: (i + 0.5) / 8,
+  width: rnd(0.03, 0.09),
+  alpha: rnd(0.03, 0.08),
+  speed: rnd(0.0003, 0.0007),
+  phase: rnd(0, Math.PI * 2)
+}));
+
+function drawBackground() {
+  // Deep gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0,   '#0a2d50');
+  grad.addColorStop(0.3, '#062040');
+  grad.addColorStop(0.7, '#030f22');
+  grad.addColorStop(1,   '#010810');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // God rays
+  const now = Date.now() * 0.001;
+  rays.forEach(r => {
+    const cx = (r.x + Math.sin(now * r.speed * 1000 + r.phase) * 0.03) * W;
+    const hw = r.width * W * 0.5;
+    const rg = ctx.createLinearGradient(0, 0, 0, H * 0.75);
+    rg.addColorStop(0,   `rgba(100,200,255,${r.alpha})`);
+    rg.addColorStop(0.5, `rgba(60,150,220,${r.alpha * 0.5})`);
+    rg.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.beginPath();
+    ctx.moveTo(cx - hw * 0.3, 0);
+    ctx.lineTo(cx + hw * 0.3, 0);
+    ctx.lineTo(cx + hw, H * 0.75);
+    ctx.lineTo(cx - hw, H * 0.75);
+    ctx.closePath();
+    ctx.fillStyle = rg;
+    ctx.fill();
+  });
+}
+
+// ─── Particles (plankton) ─────────────────────────────────────────────────────
+const particles = Array.from({length: 120}, () => ({
+  x: rnd(0, 1), y: rnd(0, 1),
+  r: rnd(0.5, 2),
+  speed: rnd(0.00003, 0.00008),
+  drift: rnd(-0.00002, 0.00002),
+  alpha: rnd(0.2, 0.6)
+}));
+
+function drawParticles() {
+  particles.forEach(p => {
+    p.y -= p.speed;
+    p.x += p.drift;
+    if (p.y < 0) { p.y = 1; p.x = rnd(0, 1); }
+    if (p.x < 0 || p.x > 1) p.drift *= -1;
+    ctx.beginPath();
+    ctx.arc(p.x * W, p.y * H, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(180,230,255,${p.alpha})`;
+    ctx.fill();
+  });
+}
+
+// ─── Bubbles ──────────────────────────────────────────────────────────────────
+class Bubble {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.r = rnd(2, 7);
+    this.vx = rnd(-0.4, 0.4);
+    this.vy = rnd(-1.2, -0.5);
+    this.alpha = rnd(0.4, 0.8);
+    this.alive = true;
+  }
+  update() {
+    this.x += this.vx + Math.sin(Date.now() * 0.003 + this.r) * 0.3;
+    this.y += this.vy;
+    this.alpha -= 0.003;
+    if (this.y < -10 || this.alpha <= 0) this.alive = false;
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(180,230,255,${this.alpha})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    const hl = ctx.createRadialGradient(this.x - this.r*0.3, this.y - this.r*0.3, 0, this.x, this.y, this.r);
+    hl.addColorStop(0, `rgba(255,255,255,${this.alpha * 0.5})`);
+    hl.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hl;
+    ctx.fill();
+  }
+}
+
+// ─── Diver ────────────────────────────────────────────────────────────────────
+class Diver {
+  constructor() {
+    this.x = rnd(0.2, 0.8) * W;
+    this.y = rnd(0.3, 0.7) * H;
+    this.tx = rnd(0.15, 0.85) * W;
+    this.ty = rnd(0.2, 0.75) * H;
+    this.speed = rnd(0.5, 0.9);
+    this.facing = 1;
+    this.bubbleTimer = 0;
+    this.bubbles = [];
+  }
+  update() {
+    const dx = this.tx - this.x, dy = this.ty - this.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < 8) {
+      this.tx = rnd(0.15, 0.85) * W;
+      this.ty = rnd(0.2, 0.75) * H;
+    }
+    this.x += (dx / dist) * this.speed;
+    this.y += (dy / dist) * this.speed;
+    this.facing = dx > 0 ? 1 : -1;
+
+    this.bubbleTimer++;
+    if (this.bubbleTimer > rndInt(50, 130)) {
+      const n = rndInt(2, 6);
+      // Mouth position: head is at top-center; mouth slightly forward
+      const mouthX = this.x + this.facing * 14;
+      const mouthY = this.y - 28;
+      for (let i = 0; i < n; i++) this.bubbles.push(new Bubble(mouthX + rnd(-2, 2), mouthY + rnd(-2, 2)));
+      this.bubbleTimer = 0;
+    }
+    this.bubbles.forEach(b => b.update());
+    this.bubbles = this.bubbles.filter(b => b.alive);
+  }
+
+  draw() {
+    this.bubbles.forEach(b => b.draw());
+
+    const t = Date.now() * 0.002;
+    const f = this.facing; // 1=right, -1=left
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    // ── coordinate system: 0,0 = hips center. Y grows downward. ──
+    // Total human height ~80px. Head top ≈ -80, fins bottom ≈ +50
+
+    // Kick cycles
+    const kick  = Math.sin(t * 2.2) * 14;  // leg/fin alternation
+    const arm   = Math.sin(t * 1.8) * 18;  // arm sweep
+
+    // ── OXYGEN TANK (behind torso, drawn first) ──────────────────
+    ctx.save();
+    ctx.translate(f * -6, -28);
+    // Tank body
+    const tkGrad = ctx.createLinearGradient(-5, -22, 5, 22);
+    tkGrad.addColorStop(0, '#9ab8c8');
+    tkGrad.addColorStop(0.4, '#c8dce8');
+    tkGrad.addColorStop(1, '#6a8898');
+    ctx.fillStyle = tkGrad;
+    ctx.beginPath(); ctx.ellipse(0, 0, 5, 22, 0, 0, Math.PI*2); ctx.fill();
+    // Tank valve
+    ctx.fillStyle = '#445566';
+    ctx.beginPath(); ctx.ellipse(0, -23, 3, 2.5, 0, 0, Math.PI*2); ctx.fill();
+    // Regulator hose
+    ctx.strokeStyle = '#223344'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(0, -21);
+    ctx.bezierCurveTo(f * 8, -18, f * 14, -30, f * 14, -32);
+    ctx.stroke();
+    ctx.restore();
+
+    // ── LEGS — horizontal flutter kick ──────────────────────────
+    // Diver swims horizontally: legs extend behind (-x when facing right)
+    // kick = alternating up/down offset on the y axis
+    const drawLeg = (side, kickOffset) => {
+      ctx.globalAlpha = side > 0 ? 1 : 0.6;
+      ctx.save();
+      ctx.translate(0, 0);
+      // Hip origin: behind torso
+      const hx = f * -8, hy = 8;
+      // Knee: slightly behind & up/down with kick
+      const kx = f * -22, ky = hy + kickOffset * 0.5;
+      // Ankle
+      const ax = f * -34, ay = hy + kickOffset;
+      // Thigh
+      ctx.strokeStyle = '#1a3a5c'; ctx.lineWidth = 10; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.stroke();
+      // Shin
+      ctx.strokeStyle = '#15304e'; ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(ax, ay); ctx.stroke();
+      // Fin — frog-webbed foot shape: 3 splayed toes with membrane between
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(kickOffset * 0.015);
+
+      // Flip so toes always point away from body (in travel direction, which is f*-1)
+      ctx.scale(f * -1, 1);
+
+      const fc = '#1a7a9a';   // fin colour
+      const wc = 'rgba(20,140,170,0.85)'; // webbing
+
+      // Three toe directions (spread fan from ankle)
+      const toes = [
+        { angle: -0.55, len: 28 }, // top toe
+        { angle:  0.0,  len: 32 }, // middle toe (longest)
+        { angle:  0.55, len: 26 }, // bottom toe
+      ];
+
+      // Draw webbing membrane between toes first (behind)
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      toes.forEach(toe => {
+        const tx = Math.cos(toe.angle) * toe.len;
+        const ty = Math.sin(toe.angle) * toe.len;
+        ctx.lineTo(tx, ty);
+      });
+      // Close back through middle
+      ctx.lineTo(0, 0);
+      ctx.fillStyle = wc;
+      ctx.fill();
+
+      // Webbing between each pair of toes as curved membrane
+      for (let i = 0; i < toes.length - 1; i++) {
+        const t1 = toes[i], t2 = toes[i + 1];
+        const x1 = Math.cos(t1.angle) * t1.len;
+        const y1 = Math.sin(t1.angle) * t1.len;
+        const x2 = Math.cos(t2.angle) * t2.len;
+        const y2 = Math.sin(t2.angle) * t2.len;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(x1, y1);
+        ctx.quadraticCurveTo(
+          (x1 + x2) * 0.5 + Math.cos((t1.angle + t2.angle) * 0.5) * 6,
+          (y1 + y2) * 0.5 + Math.sin((t1.angle + t2.angle) * 0.5) * 6,
+          x2, y2
+        );
+        ctx.closePath();
+        ctx.fillStyle = wc;
+        ctx.fill();
+        // Membrane edge highlight
+        ctx.strokeStyle = 'rgba(80,200,230,0.3)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+      }
+
+      // Draw toe bones on top
+      toes.forEach(toe => {
+        const tx = Math.cos(toe.angle) * toe.len;
+        const ty = Math.sin(toe.angle) * toe.len;
+        ctx.strokeStyle = fc;
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+        // Toe tip
+        ctx.fillStyle = darken2(fc, 15);
+        ctx.beginPath();
+        ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Heel/ankle cap
+      ctx.fillStyle = '#15304e';
+      ctx.beginPath();
+      ctx.arc(0, 0, 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    };
+    drawLeg(-1, -kick); // far leg
+    drawLeg(1,  kick);  // near leg
+
+    // ── TORSO / WETSUIT ──────────────────────────────────────────
+    const torsoGrad = ctx.createLinearGradient(f * -12, -55, f * 12, -10);
+    torsoGrad.addColorStop(0, '#1c3d5e');
+    torsoGrad.addColorStop(0.5, '#254d74');
+    torsoGrad.addColorStop(1, '#1a3550');
+    ctx.fillStyle = torsoGrad;
+    ctx.beginPath();
+    ctx.moveTo(f * -10, -50);
+    ctx.bezierCurveTo(f * -13, -35, f * -13, -15, f * -8, 0);
+    ctx.bezierCurveTo(f * -2, 4, f * 2, 4, f * 8, 0);
+    ctx.bezierCurveTo(f * 13, -15, f * 13, -35, f * 10, -50);
+    ctx.bezierCurveTo(f * 4, -54, f * -4, -54, f * -10, -50);
+    ctx.fill();
+    // BCD vest overlay
+    ctx.fillStyle = 'rgba(40,80,120,0.45)';
+    ctx.beginPath();
+    ctx.moveTo(f * -10, -50);
+    ctx.bezierCurveTo(f * -14, -42, f * -14, -28, f * -10, -20);
+    ctx.bezierCurveTo(f * -5, -18, f * 5, -18, f * 10, -20);
+    ctx.bezierCurveTo(f * 14, -28, f * 14, -42, f * 10, -50);
+    ctx.bezierCurveTo(f * 4, -54, f * -4, -54, f * -10, -50);
+    ctx.fill();
+    // Wetsuit center stripe
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, -50); ctx.lineTo(0, 0); ctx.stroke();
+
+    // ── ARMS ────────────────────────────────────────────────────
+    const drawArm = (side, swing) => {
+      ctx.globalAlpha = side > 0 ? 1 : 0.65;
+      // Upper arm
+      ctx.strokeStyle = '#1c3d5e'; ctx.lineWidth = 8; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(f * 10, -46);
+      ctx.lineTo(f * (14 + swing * 0.3), -30 + swing * 0.5);
+      ctx.stroke();
+      // Forearm
+      ctx.strokeStyle = '#254d74'; ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.moveTo(f * (14 + swing * 0.3), -30 + swing * 0.5);
+      ctx.lineTo(f * (16 + swing * 0.5), -14 + swing);
+      ctx.stroke();
+      // Glove hand
+      ctx.fillStyle = '#0d2a40';
+      ctx.beginPath();
+      ctx.arc(f * (16 + swing * 0.5), -13 + swing, 4, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    };
+    drawArm(-1, -arm * 0.6); // far arm
+    drawArm(1,   arm);       // near arm
+
+    // ── NECK ────────────────────────────────────────────────────
+    ctx.fillStyle = '#1c3d5e';
+    ctx.beginPath(); ctx.ellipse(0, -52, 5, 4, 0, 0, Math.PI*2); ctx.fill();
+
+    // ── HEAD / HELMET ────────────────────────────────────────────
+    // Helmet shell
+    const helmGrad = ctx.createRadialGradient(f * 3, -68, 2, 0, -65, 18);
+    helmGrad.addColorStop(0, '#2a4a6a');
+    helmGrad.addColorStop(1, '#0d2035');
+    ctx.fillStyle = helmGrad;
+    ctx.beginPath(); ctx.arc(0, -65, 16, 0, Math.PI*2); ctx.fill();
+
+    // Helmet strap / trim ring
+    ctx.strokeStyle = '#0a1828'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -65, 16, 0, Math.PI*2); ctx.stroke();
+
+    // ── FACE MASK ────────────────────────────────────────────────
+    // Mask frame
+    ctx.fillStyle = '#0a1828';
+    ctx.beginPath();
+    ctx.ellipse(f * 5, -65, 11, 9, f * 0.15, 0, Math.PI*2);
+    ctx.fill();
+    // Lens glass
+    const lensGrad = ctx.createLinearGradient(f * -2, -72, f * 12, -58);
+    lensGrad.addColorStop(0, 'rgba(120,210,255,0.75)');
+    lensGrad.addColorStop(0.5, 'rgba(60,150,220,0.55)');
+    lensGrad.addColorStop(1, 'rgba(20,80,160,0.45)');
+    ctx.fillStyle = lensGrad;
+    ctx.beginPath();
+    ctx.ellipse(f * 5, -65, 9, 7, f * 0.15, 0, Math.PI*2);
+    ctx.fill();
+    // Lens glint
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(f * 6, -70, 3, 1.5, f * -0.6, 0, Math.PI*2);
+    ctx.fill();
+    // Mask strap
+    ctx.strokeStyle = '#060f1a'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(f * -4, -65);
+    ctx.bezierCurveTo(f * -8, -62, f * -14, -62, f * -14, -65);
+    ctx.stroke();
+
+    // Regulator mouthpiece
+    ctx.fillStyle = '#223344';
+    ctx.beginPath(); ctx.ellipse(f * 13, -58, 3, 4, f * 0.3, 0, Math.PI*2); ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// ─── Fish (schooling) ─────────────────────────────────────────────────────────
+class Boid {
+  constructor(cx, cy) {
+    this.x = cx + rnd(-30, 30);
+    this.y = cy + rnd(-30, 30);
+    const angle = rnd(0, Math.PI*2);
+    const sp = rnd(1.5, 2.5);
+    this.vx = Math.cos(angle)*sp; this.vy = Math.sin(angle)*sp;
+    this.color = `hsl(${rndInt(160,220)},80%,70%)`;
+  }
+  draw() {
+    // Fish model faces RIGHT (+x). Rotate to match velocity direction.
+    const angle = Math.atan2(this.vy, this.vx);
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(angle);
+    // Body
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 7, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Tail at back (left = -x)
+    ctx.beginPath();
+    ctx.moveTo(-6, 0);
+    ctx.lineTo(-12, -4);
+    ctx.lineTo(-12, 4);
+    ctx.closePath();
+    ctx.fill();
+    // Eye at front (right = +x)
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(4, -1, 1.2, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+class FishSchool {
+  constructor() { this.spawn(); }
+  spawn() {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    this.cx = side < 0 ? -50 : W + 50;
+    this.cy = rnd(0.2, 0.8) * H;
+    this.dir = -side; // dir=+1 → moving right; dir=-1 → moving left
+    this.vy = rnd(-0.3, 0.3);
+    this.speed = rnd(1.8, 3.0);
+    this.boids = Array.from({length: rndInt(20, 50)}, () => new Boid(this.cx, this.cy));
+    // Initialise all boids moving in the correct direction
+    this.boids.forEach(b => {
+      b.vx = this.dir * rnd(1.5, 2.5);
+      b.vy = rnd(-0.5, 0.5);
+    });
+    this.alive = true;
+  }
+  update() {
+    this.cx += this.dir * this.speed;
+    this.cy += this.vy;
+    this.boids.forEach(b => {
+      const dx = this.cx - b.x, dy = this.cy - b.y;
+      // Cohesion toward center
+      b.vx += dx * 0.012 + rnd(-0.06, 0.06);
+      b.vy += dy * 0.012 + rnd(-0.06, 0.06);
+      // Separation from neighbours
+      this.boids.forEach(other => {
+        if (other === b) return;
+        const sx = b.x - other.x, sy = b.y - other.y;
+        const d2 = sx*sx + sy*sy;
+        if (d2 < 900 && d2 > 0) { // repel within 30px
+          const d = Math.sqrt(d2);
+          b.vx += (sx / d) * (30 - d) * 0.04;
+          b.vy += (sy / d) * (30 - d) * 0.04;
+        }
+      });
+      // Clamp speed
+      const sp = Math.sqrt(b.vx*b.vx + b.vy*b.vy);
+      if (sp > 3.5) { b.vx = b.vx/sp*3.5; b.vy = b.vy/sp*3.5; }
+      if (sp < 1.0) { b.vx = b.vx/sp*1.0; b.vy = b.vy/sp*1.0; }
+      // Never reverse main direction
+      if (this.dir > 0 && b.vx < 0.4) b.vx = 0.4;
+      if (this.dir < 0 && b.vx > -0.4) b.vx = -0.4;
+      b.x += b.vx; b.y += b.vy;
+    });
+    if (this.cx < -200 || this.cx > W + 200) this.alive = false;
+  }
+  draw() { this.boids.forEach(b => b.draw()); }
+}
+
+// ─── Shark ────────────────────────────────────────────────────────────────────
+class Shark {
+  constructor() {
+    this.side = Math.random() < 0.5 ? -1 : 1; // spawn side: -1=left edge, +1=right edge
+    this.x = this.side < 0 ? -120 : W + 120;
+    this.y = rnd(0.3, 0.8) * H;
+    this.travelDir = -this.side; // +1=moving right, -1=moving left
+    this.speed = rnd(1.5, 2.5);
+    this.phase = rnd(0, Math.PI*2);
+    this.alive = true;
+    this.size = rnd(0.8, 1.4);
+  }
+  update() {
+    this.x += this.travelDir * this.speed;
+    this.y += Math.sin(Date.now() * 0.001 + this.phase) * 0.8;
+    if (this.x < -200 || this.x > W + 200) this.alive = false;
+  }
+  draw() {
+    const s = this.size;
+    const t = Date.now() * 0.002;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // Model faces RIGHT (+x). Flip horizontally only when moving left.
+    ctx.scale(this.travelDir, 1);
+    ctx.scale(s, s);
+
+    // Tail fin (oscillating)
+    const tailSwing = Math.sin(t * 2.5) * 18;
+    ctx.fillStyle = '#2a3a4a';
+    ctx.beginPath();
+    ctx.moveTo(-55, 0);
+    ctx.lineTo(-80, -20 + tailSwing);
+    ctx.lineTo(-80, 20 + tailSwing);
+    ctx.closePath();
+    ctx.fill();
+
+    // Body
+    const bodyGrad = ctx.createLinearGradient(-60, -18, 60, 18);
+    bodyGrad.addColorStop(0, '#3a5a6a');
+    bodyGrad.addColorStop(0.4, '#4a7a8a');
+    bodyGrad.addColorStop(1, '#2a4a5a');
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.moveTo(60, 0);
+    ctx.bezierCurveTo(50, -18, -20, -18, -55, 0);
+    ctx.bezierCurveTo(-20, 18, 50, 18, 60, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Belly
+    ctx.fillStyle = 'rgba(200,220,230,0.3)';
+    ctx.beginPath();
+    ctx.moveTo(55, 0);
+    ctx.bezierCurveTo(40, -10, -10, -10, -40, 0);
+    ctx.bezierCurveTo(-10, 10, 40, 10, 55, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Dorsal fin
+    ctx.fillStyle = '#2a4a5a';
+    ctx.beginPath();
+    ctx.moveTo(10, -18);
+    ctx.lineTo(30, -45);
+    ctx.lineTo(40, -18);
+    ctx.closePath();
+    ctx.fill();
+
+    // Pectoral fin
+    ctx.beginPath();
+    ctx.moveTo(20, 5);
+    ctx.lineTo(35, 30);
+    ctx.lineTo(0, 18);
+    ctx.closePath();
+    ctx.fill();
+
+    // Eye
+    ctx.fillStyle = '#0a1a1a';
+    ctx.beginPath();
+    ctx.arc(48, -5, 4, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.beginPath();
+    ctx.arc(49, -6, 1.5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Gill slits
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.moveTo(32 + i*3, -8);
+      ctx.lineTo(30 + i*3, 8);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+
+// ─── Whale ────────────────────────────────────────────────────────────────────
+class Whale {
+  constructor() {
+    this.side = Math.random() < 0.5 ? -1 : 1;
+    this.x = this.side < 0 ? -350 : W + 350;
+    this.y = rnd(0.1, 0.6) * H;
+    this.travelDir = -this.side; // +1=moving right, -1=moving left
+    this.speed = rnd(0.6, 1.1);
+    this.alive = true;
+    this.scale = rnd(1.0, 1.8);
+  }
+  update() {
+    this.x += this.travelDir * this.speed;
+    this.y += Math.sin(Date.now() * 0.0005) * 0.4;
+    if (this.x < -600 || this.x > W + 600) this.alive = false;
+  }
+  draw() {
+    const s = this.scale;
+    const t = Date.now() * 0.001;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // Model faces RIGHT (+x). Flip only when moving left.
+    ctx.scale(this.travelDir, 1);
+    ctx.scale(s, s);
+
+    // Tail flukes
+    const flukeSwing = Math.sin(t * 1.2) * 20;
+    ctx.fillStyle = '#1a2a3a';
+    ctx.beginPath();
+    ctx.moveTo(-190, flukeSwing);
+    ctx.lineTo(-240, -35 + flukeSwing);
+    ctx.bezierCurveTo(-220, -5 + flukeSwing, -210, 5 + flukeSwing, -190, flukeSwing);
+    ctx.bezierCurveTo(-210, 5 + flukeSwing, -220, 15 + flukeSwing, -240, 45 + flukeSwing);
+    ctx.closePath();
+    ctx.fill();
+
+    // Body
+    const wGrad = ctx.createLinearGradient(-200, -60, 200, 60);
+    wGrad.addColorStop(0, '#1a2a3a');
+    wGrad.addColorStop(0.5, '#243a50');
+    wGrad.addColorStop(1, '#1a2a3a');
+    ctx.fillStyle = wGrad;
+    ctx.beginPath();
+    ctx.moveTo(180, 0);
+    ctx.bezierCurveTo(150, -65, -80, -65, -190, -5);
+    ctx.bezierCurveTo(-100, 70, 150, 70, 180, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Belly lighter
+    ctx.fillStyle = 'rgba(180,210,230,0.15)';
+    ctx.beginPath();
+    ctx.moveTo(150, 0);
+    ctx.bezierCurveTo(120, -30, -50, -30, -150, -2);
+    ctx.bezierCurveTo(-50, 45, 120, 45, 150, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Throat grooves
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath();
+      ctx.moveTo(80 - i*20, -30 + i*2);
+      ctx.bezierCurveTo(40 - i*15, 20, -60 - i*10, 20, -100 - i*8, 5);
+      ctx.stroke();
+    }
+
+    // Pectoral fin
+    ctx.fillStyle = '#152030';
+    ctx.beginPath();
+    ctx.moveTo(60, 30);
+    ctx.bezierCurveTo(80, 80, 20, 100, -20, 75);
+    ctx.bezierCurveTo(20, 60, 40, 45, 60, 30);
+    ctx.closePath();
+    ctx.fill();
+
+    // Dorsal fin (small hump)
+    ctx.fillStyle = '#152030';
+    ctx.beginPath();
+    ctx.moveTo(-60, -65);
+    ctx.lineTo(-40, -90);
+    ctx.lineTo(-20, -65);
+    ctx.closePath();
+    ctx.fill();
+
+    // Eye
+    ctx.fillStyle = '#050f18';
+    ctx.beginPath();
+    ctx.arc(145, -10, 7, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath();
+    ctx.arc(147, -12, 2.5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Blowhole
+    ctx.fillStyle = '#111e2a';
+    ctx.beginPath();
+    ctx.ellipse(100, -65, 6, 3, 0.3, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// ─── Sea Turtle ───────────────────────────────────────────────────────────────
+class Turtle {
+  constructor() {
+    this.side = Math.random() < 0.5 ? -1 : 1; // -1 = enters from left, +1 = enters from right
+    this.x = this.side < 0 ? -80 : W + 80;
+    this.y = rnd(0.2, 0.8) * H;
+    this.travelDir = -this.side; // actual movement direction: -1 enters from right→moves left, +1 enters from left→moves right
+    this.speed = rnd(0.7, 1.3);
+    this.wobble = rnd(0, Math.PI*2);
+    this.alive = true;
+  }
+  update() {
+    this.x += this.travelDir * this.speed;
+    this.y += Math.sin(Date.now() * 0.001 + this.wobble) * 0.4;
+    if (this.x < -150 || this.x > W + 150) this.alive = false;
+  }
+  draw() {
+    const t = Date.now() * 0.002;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    // Turtle model faces RIGHT (+x). Flip if moving left.
+    ctx.scale(this.travelDir, 1);
+
+    const flipperAngle = Math.sin(t * 1.8) * 0.5;
+
+    // Back flippers
+    ctx.save();
+    ctx.translate(-22, 8);
+    ctx.rotate(flipperAngle * 0.5 + 0.3);
+    ctx.fillStyle = '#2d6a3a';
+    ctx.beginPath(); ctx.ellipse(0, 0, 18, 6, 0.8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(-22, -8);
+    ctx.rotate(-flipperAngle * 0.5 - 0.3);
+    ctx.fillStyle = '#2d6a3a';
+    ctx.beginPath(); ctx.ellipse(0, 0, 18, 6, -0.8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // Front flippers
+    ctx.save();
+    ctx.translate(10, 14);
+    ctx.rotate(flipperAngle + 0.4);
+    ctx.fillStyle = '#3a8050';
+    ctx.beginPath(); ctx.ellipse(0, 0, 22, 7, 0.9, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(10, -14);
+    ctx.rotate(-flipperAngle - 0.4);
+    ctx.fillStyle = '#3a8050';
+    ctx.beginPath(); ctx.ellipse(0, 0, 22, 7, -0.9, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // Shell
+    const shellGrad = ctx.createRadialGradient(-5, -5, 2, 0, 0, 30);
+    shellGrad.addColorStop(0, '#5aaa60');
+    shellGrad.addColorStop(0.5, '#2d7a3a');
+    shellGrad.addColorStop(1, '#1a4a22');
+    ctx.fillStyle = shellGrad;
+    ctx.beginPath(); ctx.ellipse(0, 0, 28, 22, 0, 0, Math.PI*2); ctx.fill();
+
+    // Shell pattern
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.rect(-7, -7, 14, 14); ctx.stroke();
+    for (let a = 0; a < 6; a++) {
+      const ax = Math.cos(a * Math.PI/3) * 16, ay = Math.sin(a * Math.PI/3) * 12;
+      ctx.beginPath(); ctx.rect(ax-5, ay-4, 10, 8); ctx.stroke();
+    }
+
+    // Head — at +x (front/right) since model faces right
+    ctx.fillStyle = '#2d6a3a';
+    ctx.beginPath(); ctx.ellipse(33, 0, 13, 9, 0, 0, Math.PI*2); ctx.fill();
+
+    // Eye
+    ctx.fillStyle = '#0a1a0a';
+    ctx.beginPath(); ctx.arc(39, -3, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath(); ctx.arc(40, -4, 1, 0, Math.PI*2); ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+// ─── Scene Manager ────────────────────────────────────────────────────────────
+const diver = new Diver();
+let schools = [], sharks = [], whales = [], turtles = [];
+let schoolTimer = rndInt(300, 600);
+let sharkTimer = rndInt(600, 1200);
+let whaleTimer = rndInt(1200, 2400);
+let turtleTimer = rndInt(500, 1000);
+
+function spawnEntities() {
+  schoolTimer--;
+  if (schoolTimer <= 0) { schools.push(new FishSchool()); schoolTimer = rndInt(400, 900); }
+  sharkTimer--;
+  if (sharkTimer <= 0) { sharks.push(new Shark()); sharkTimer = rndInt(700, 1500); }
+  whaleTimer--;
+  if (whaleTimer <= 0) { whales.push(new Whale()); whaleTimer = rndInt(1500, 3000); }
+  turtleTimer--;
+  if (turtleTimer <= 0) { turtles.push(new Turtle()); turtleTimer = rndInt(600, 1200); }
+}
+
+
+function bedY(x) {
+  return H * 0.88 + Math.sin(x * 0.008) * 12 + Math.sin(x * 0.025) * 6;
+}
+
+function drawSeabed() {
+  const grad = ctx.createLinearGradient(0, H * 0.85, 0, H);
+  grad.addColorStop(0, '#0d1f2e');
+  grad.addColorStop(0.4, '#091520');
+  grad.addColorStop(1, '#040c14');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(0, bedY(0));
+  for (let x = 0; x <= W; x += 15) ctx.lineTo(x, bedY(x));
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+  ctx.fill();
+}
+
+
+// ─── Main Loop ────────────────────────────────────────────────────────────────
+function loop() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+  drawParticles();
+  drawSeabed();
+
+  // Update & draw entities (depth order: whales back, then sharks, school, turtle, diver front)
+  whales.forEach(w => { w.update(); w.draw(); });
+  whales = whales.filter(w => w.alive);
+
+  sharks.forEach(s => { s.update(); s.draw(); });
+  sharks = sharks.filter(s => s.alive);
+
+  schools.forEach(sc => { sc.update(); sc.draw(); });
+  schools = schools.filter(sc => sc.alive);
+
+  turtles.forEach(tu => { tu.update(); tu.draw(); });
+  turtles = turtles.filter(t => t.alive);
+
+  diver.update();
+  diver.draw();
+
+  spawnEntities();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
